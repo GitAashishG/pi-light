@@ -1,0 +1,13 @@
+{
+  "name": "pi-light-firmware-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Project-local official Particle module metadata reader; no hardware access",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "dependencies": {
+    "@particle/device-constants": "4.2.1",
+    "binary-version-reader": "5.0.0"
+  }
+}

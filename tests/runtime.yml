@@ -1,0 +1,15 @@
+mcp:
+  enabled: false
+memory:
+  enabled: false
+advisor:
+  enabled: false
+compaction:
+  enabled: false
+retry:
+  enabled: false
+speech:
+  enabled: false
+ask:
+  notify: off
+  timeout: 0
