@@ -2,9 +2,11 @@
 
 Target: original Particle Photon / P0, Gen 2, STM32F205, Particle platform ID **6**. Photon 2/P2 (RTL872x), Boron and other boards are not compatible. The application rejects other platform IDs at compile time.
 
+For device selection, flashing commands and recovery precautions, use [Build and flash the Photon](../docs/FIRMWARE.md). This reference covers the local build and firmware internals.
+
 ## Build and native tests
 
-From the project root on this Mac:
+From the repository root:
 
 ```sh
 bash scripts/build-firmware.sh
@@ -19,19 +21,9 @@ Outputs:
 - `firmware/build/pi-light.module.json`: metadata and CRC checked by Particle's `binary-version-reader`.
 - `firmware/build/pi-light.bin.sha256`: build output digest.
 
-The equivalent compilation command, after preparation, is:
+The build script runs `make_deps` before `all` to prevent a clean parallel build from linking before the Device OS dynalib archives exist. It then validates the application with `firmware/tools/inspect-module.cjs` and writes the module report and SHA-256 digest.
 
-```sh
-make -C firmware/.tools/device-os-2.3.1/modules/photon/user-part -j4 \
-  PLATFORM=photon \
-  APPDIR="$PWD/firmware/src" \
-  TARGET_DIR="$PWD/firmware/build" \
-  TARGET_FILE=pi-light \
-  GCC_ARM_PATH="$PWD/firmware/.tools/gcc-arm-none-eabi-9-2019-q4-major/bin/" all
-node firmware/tools/inspect-module.cjs firmware/build/pi-light.bin user
-```
-
-Use `JOBS=2 bash scripts/build-firmware.sh` to change parallelism. Particle's 2.x makefiles require a project path without spaces. Native prerequisites are `git`, `curl`, `tar`, `shasum`, GNU `make`, `crc32`, `xxd`, Node >=22.23.4, and Bun with text-lockfile support. The scripts do not install global tools or modify shell profiles. `BUN_BIN` may select an existing Bun executable.
+Use `JOBS=2 bash scripts/build-firmware.sh` to change parallelism. See the [README prerequisites](../README.md#prerequisites) for host tools. Particle's 2.x makefiles require a checkout path without spaces. The scripts do not install global tools or modify shell profiles. `BUN_BIN` may select an existing Bun executable.
 
 Preparation without compiling:
 
@@ -39,13 +31,13 @@ Preparation without compiling:
 bash scripts/prepare-firmware-tools.sh
 ```
 
-Portable parser/watchdog/animation tests, including malformed and 96-byte boundaries, uint32 overflow, millis wrap, heartbeat timeout, completion latching, brightness zero and channel ceilings:
+Run the portable parser, watchdog and animation tests, plus saved-header decoder tests:
 
 ```sh
 make -C tests/firmware test
 ```
 
-The native target uses C++14, AddressSanitizer and UndefinedBehaviorSanitizer and writes only under `firmware/build/native/`. It does not require the MCU SDK or hardware. Neither this test target nor the firmware build was executed during the firmware implementation handoff; the integration owner runs them.
+The native target requires a C++14 compiler with AddressSanitizer and UndefinedBehaviorSanitizer, plus `python3` on `PATH`. It writes its executable under `firmware/build/native/` and needs neither the MCU SDK nor hardware. Coverage includes malformed input, the 96-byte line boundary, uint32 overflow, millis wrap, heartbeat timeout, completion latching, brightness zero and channel ceilings.
 
 ## Pinned sources and tools
 
@@ -59,17 +51,16 @@ The native target uses C++14, AddressSanitizer and UndefinedBehaviorSanitizer an
 | Compiler download | `https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2019q4/gcc-arm-none-eabi-9-2019-q4-major-mac.tar.bz2` |
 | Compiler destination | `firmware/.tools/gcc-arm-none-eabi-9-2019-q4-major/` |
 | Compiler archive SHA-256 | `1249f860d4155d9c3ba8f30c19e7a88c5047923cea17e0d08e633f12408f01f0` |
-| Compiler upstream Content-MD5 | `241b64f0578db2cf146034fc5bcee3d4`, matching the downloaded archive |
-| Official module parser | npm `binary-version-reader@5.0.0`, Particle-maintained source commit `80e8f7063d03f6c97f55d41b2655c9af26b7f03a`, Apache-2.0 |
+| Official module parser | npm `binary-version-reader@5.0.0` |
 | Parser npm integrity | `sha512-VTom4XLIvGjZJJrqDBErjw1dxYZvQfCYv6SZjpb7tb0wYImxPKuqqC+XDQ+mO9nWw5VojkriETNKpCfN6wToCA==` |
 | Parser peer package | `@particle/device-constants@4.2.1` |
-| JS dependency lock | `firmware/tools/bun.lock`; SHA-256 `65c22e977478f3bc595bc83b2561ed62f1b2160710e6d6e9a9bba87bb34d9b52` |
+| JS dependency lock | `firmware/tools/bun.lock`; frozen installation with package integrity hashes |
 
-`v2.3.1` is marked prerelease in the upstream release metadata. This is an explicit 2.x target that includes Photon binaries, not a cloud compiler's current/default-board assumption. Source and public artifacts came from the URLs above over HTTPS. The SHA-256 pins were computed from those downloaded artifacts, not claimed as independently signed vendor checksums.
+`v2.3.1` is marked prerelease in the upstream release metadata. It is the pinned original-Photon target, not a cloud compiler's default board or Device OS. The SHA-256 pins identify the public release artifacts; they are not independently signed vendor checksums.
 
-The compiler is a macOS x86_64 executable. On this arm64 Mac its `--version` command executed successfully using the already-available translation support. Preparation checks that executable but does not install Rosetta or change security/quarantine permissions. GNU Make 3.81, Node v26.11.1, Bun 1.4.2, `/usr/bin/crc32` and `/usr/bin/xxd` were available. Docker's selected OrbStack socket was absent; the native build does not use Docker. Particle CLI and dfu-util are not prerequisites for compilation and were not installed by this component.
+The compiler is a macOS x86_64 executable. Intel Macs can run it directly; Apple Silicon requires working x86 translation support. Preparation checks `arm-none-eabi-gcc --version` but does not install Rosetta or change security/quarantine permissions. Docker, Particle CLI and `dfu-util` are not needed for compilation. Install Particle CLI separately for flashing, as described in the [flash guide](../docs/FIRMWARE.md#2-install-particle-cli-separately).
 
-The preparation script checks download digests before extraction, verifies the Device OS commit, initializes its pinned submodules, and installs locked metadata-reader packages with `--ignore-scripts`. The compiler, source tree, downloads, system images and node_modules remain ignored local files. To inspect the exact upstream source snapshot later:
+Preparation checks download digests before extraction, verifies the Device OS commit, initializes its pinned submodules, and installs locked metadata-reader packages with `--frozen-lockfile --ignore-scripts`. The compiler, source tree, downloads, system images and `node_modules` remain ignored local files. Inspect the source revision and submodules with:
 
 ```sh
 git -C firmware/.tools/device-os-2.3.1 rev-parse HEAD
@@ -78,7 +69,7 @@ git -C firmware/.tools/device-os-2.3.1 submodule status --recursive
 
 ## Module layout and Device OS compatibility
 
-The official Photon linker scripts, modular makefiles and inspected release binaries agree on this layout. These are module addresses, not authorization to write arbitrary flash.
+The pinned Photon linker scripts and modular makefiles define this layout. These are module addresses, not raw flash-write instructions.
 
 | Component | Address | Size limit | Required module metadata |
 | --- | --- | --- | --- |
@@ -88,14 +79,14 @@ The official Photon linker scripts, modular makefiles and inspected release bina
 
 Source references: [`modules/photon/modular.mk`](https://github.com/particle-iot/device-os/blob/5aa7c8e1c7282b7c52040b77811186925d0febdc/modules/photon/modular.mk), [`user-part/linker.ld`](https://github.com/particle-iot/device-os/blob/5aa7c8e1c7282b7c52040b77811186925d0febdc/modules/photon/user-part/linker.ld), [`user_build.mk`](https://github.com/particle-iot/device-os/blob/5aa7c8e1c7282b7c52040b77811186925d0febdc/modules/shared/stm32f2xx/user_build.mk), and [`system_module_version.mk`](https://github.com/particle-iot/device-os/blob/5aa7c8e1c7282b7c52040b77811186925d0febdc/modules/shared/system_module_version.mk).
 
-The exact validated system target is the pair of 2.3.1 components with bootloader >=1003. A newer original-Photon Device OS can satisfy the encoded minimum dependency, but has not been validated by this handoff. Do not downgrade an already compatible device just to match the build tag. The current connected device's installed modules were not inspected by this worker.
+The reference configuration is the pair of 2.3.1 system components with bootloader >=1003. A newer original-Photon Device OS can satisfy the encoded minimum dependency; check the complete module set for integrity and compatible dependencies before installing the application. Do not downgrade an already compatible device merely to match the build tag.
 
 The official [2.3.1 release](https://github.com/particle-iot/device-os/releases/tag/v2.3.1) provides:
 
-| Downloaded file under `firmware/.tools/releases/` | SHA-256 | Observed CRC |
-| --- | --- | --- |
-| `photon-system-part1@2.3.1.bin` | `cf215e3564aa4e40ff12e73ba10a6092717984bacc87cfea3f5c6c15a19aadea` | `13055d01`, valid |
-| `photon-system-part2@2.3.1.bin` | `b7d6965a357a5919e37bda6e031aef2f9a6dcfc583a8dbc928843a518cef6324` | `bded86f5`, valid |
+| File under `firmware/.tools/releases/` | SHA-256 |
+| --- | --- |
+| `photon-system-part1@2.3.1.bin` | `cf215e3564aa4e40ff12e73ba10a6092717984bacc87cfea3f5c6c15a19aadea` |
+| `photon-system-part2@2.3.1.bin` | `b7d6965a357a5919e37bda6e031aef2f9a6dcfc583a8dbc928843a518cef6324` |
 
 Direct public downloads (also pinned in preparation):
 
@@ -111,7 +102,7 @@ node firmware/tools/inspect-module.cjs 'firmware/.tools/releases/photon-system-p
 
 ### Header-only inspection while already in DFU
 
-The integration owner can read just the following 24-byte module prefixes. No application execution, network connection or configuration/key dump is needed. These are read locations, not write commands.
+For an original Photon already identified in DFU, read only the following 24-byte module prefixes. No application execution, network connection or configuration/key dump is needed. These are read locations, not write commands.
 
 | Component | Module start | Prefix offset | Read address | Read length |
 | --- | --- | --- | --- | --- |
@@ -130,7 +121,7 @@ Authoritative pinned sources:
 
 Each header is little endian: start/end pointers at offsets 0/4, reserved/flags at 8/9, uint16 module version at 10, uint16 platform ID at 12, function/index at 14/15, and two four-byte dependencies at 16/20 (uint8 function, uint8 index, uint16 minimum version). The system/bootloader prefix offset is also the runtime rule in `FLASH_ModuleInfo` at `platform/MCU/STM32F2xx/SPARK_Firmware_Driver/src/flash_mal.c:675-696` when the module begins with a Cortex stack pointer.
 
-After the integration owner saves precisely those bytes using explicitly targeted DFU reads, decode the local files with:
+After saving precisely those bytes with explicitly targeted DFU reads, decode the local files with:
 
 ```sh
 python3 firmware/tools/inspect-header.py --addresses
@@ -141,15 +132,11 @@ python3 firmware/tools/inspect-header.py system2 firmware/build/headers/system2.
 
 This helper opens local files only, reads at most 25 bytes, and rejects files that are not exactly 24 bytes or do not identify the expected Photon component/bounds. It reports installed version, dependencies and the pi-light minimum threshold. A header cannot establish CRC integrity, authenticity or executability; output explicitly says `not_checked_header_only`. Do not label its version check as a successful integrity check. An absent/old/monolithic header is a reason to stop and identify the installed layout, not to scan or dump unrelated flash regions.
 
-### Integration owner's USB upgrade procedure
+### USB upgrades and recovery
 
-No flashing/reset/serial commands were run during this component's implementation. Before any write, identify the exact original Photon and capture its installed module inventory. The [official inspection guide](https://docs.particle.io/troubleshooting/guides/device-troubleshooting/using-particle-serial-inspect/) documents `particle serial inspect`; it requires a running Device OS USB interface and is not a DFU read command. Use the CLI's explicit device/port selector after reading that installed version's help. Never select `/dev/cu.usbserial-110`, which belongs to the unrelated ESP32.
+Follow the [flash guide](../docs/FIRMWARE.md#3-identify-the-board-and-inspect-its-dependencies) to inspect installed modules and choose application-only, system-pair or bootloader recovery. `particle serial inspect` needs a running Device OS USB interface; it is not a DFU read command.
 
-If the installed system dependencies already satisfy the table, install only the CRC-checked user module. If they do not, use only the platform-6 official components above and Particle's [USB manual module programming procedure](https://docs.particle.io/reference/developer-tools/programming-devices/). The supported CLI accepts precompiled modules with `particle flash --local <device-id> <binary-or-module-directory>` and derives destinations from module metadata. When staging multiple files, use a dedicated directory containing only the required original-Photon components and the built pi-light application, never the source tree or a mixed-platform release directory. Read the local CLI's help first; do not invoke source compilation or leave its Device OS target at a modern-board default.
-
-If the installed bootloader is below module version 1003, the two system parts alone have an unmet dependency. Use Particle's supported USB updater with an explicit original-Photon Device OS target, `particle update --target 2.3.1`, after confirming its exact device selector from that CLI's help. This requires a separate integration decision: it can update the bootloader as well as system firmware. Do not manually write a bootloader at a guessed address or bypass module validation. The release's `photon-bootloader@2.3.1+lto.bin` exists publicly, but this preparation intentionally does not download, flash or replace it.
-
-Do not use `particle login`, claim/setup commands, Wi-Fi setup, a cloud compile, factory reset, mass erase, DCT/key writes, or bootloader replacement merely to install the application. Do not boot a mismatched user/system set and assume `SYSTEM_MODE(MANUAL)` already applies: unmet dependencies can enter safe mode before application code runs, and safe mode can attempt network recovery. Preserve the device's bootloader, manufacturing data, keys and credentials. Inspect the resulting module integrity/dependencies and USB handshake after an authorized flash; build metadata alone is not evidence that the hardware runs.
+Bootloader updates must use Particle's supported normal/listening-mode Device OS updater, never a guessed raw DFU address. DFU application/system recovery cannot repair every bootloader failure. Keep power stable, preserve manufacturing data and keys, and stop if the installed layout or device identity is uncertain. During an incomplete system upgrade, safe mode may attempt network recovery before pi-light's Wi-Fi-off code runs.
 
 ## Runtime implementation
 
@@ -171,14 +158,4 @@ Animations use integer smoothstep envelopes and millis timing:
 | offline | White breath, 5000 ms period, peak brightness/6, minimum peak 1 when nonzero |
 
 No configured pattern strobes above 1 Hz. Repeated state heartbeats and brightness changes preserve the animation epoch. Completion latches after its three flashes, including across long uptime; leaving/re-entering done starts a new transition. Brightness 0 keeps all channels off, including offline. The board starts offline until the first valid state command.
-
-## Integration results on the actual board
-
-The build and native tests have now run successfully. A clean parallel SDK build initially raced a missing dynalib archive; `scripts/build-firmware.sh` now runs `make_deps` before `all` without modifying upstream sources. The resulting application has5,580bytes text,128bytes data and1,896bytes BSS, valid CRC and the documented platform6/system2302 dependency.
-
-Read-only initial headers identified bootloader2 and a monolithic platform6 application. The owner separately approved the necessary bootloader/Device OS upgrade. Particle CLI3.52.5 local `flash --usb` successfully wrote the two official2.3.1 system parts and pi-light user module. macOS then blocked the new normal-mode USB interface while locked; the owner admitted the accessory, rather than weakening a security policy. The official bootloader was installed through `flash --local` in normal/listening mode. No raw bootloader DFU write, mass erase, DCT/key dump, cloud login, device claim or Wi-Fi setup occurred.
-
-Official bootloader artifact: `photon-bootloader@2.3.1+lto.bin`, module1006,15,124bytes, CRC`d8161977`, SHA-256`f6efd97c1b3e3c417a606a9b215c29a08cca49b07e524c2a3f8ea92b9d89b241`. The source is the same public official2.3.1 GitHub release. The automatic updater's version-metadata API required a cloud token, so the supported manual local-module procedure was used instead.
-
-Particle USB's read-only `getFirmwareModuleInfo` on the test Photon reported bootloader 1006, system1/system2 version 2302 and user module 6, with empty validity-error lists and compatible dependencies. The physical firmware handshake and all expected state/RGB acknowledgments passed. These are actual hardware results, distinct from file-only parser checks. Device identifiers and raw receipts remain in ignored local evidence. See `docs/OPERATIONS.md` for the event/USB/camera acceptance procedure.
 

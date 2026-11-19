@@ -19,22 +19,29 @@ Visual defaults: working slow blue breath; waiting amber pulse at no more than 2
 
 ## Local Unix socket
 
-Default state directory: `~/.local/state/pi-light`, mode0700. Socket: `bridge.sock`, mode0600. Bridge lock and PID metadata live in the same private directory. No TCP listener and no filesystem secrets. JSONL request/response, max4096 bytes per request. Each request gets one JSON response before connection close. The bridge accepts only the schema keys for the operation and does not log request payloads.
+The bridge listens at `~/.local/state/pi-light/bridge.sock` (socket mode `0600`, directory mode `0700`). Each connection carries one newline-delimited JSON request of at most 4096 bytes and one response. The bridge rejects unknown request fields and does not log request payloads.
 
 - Update: `{"op":"update","session":"<opaque-id>","seq":1,"state":"working"}`. Session ASCII id 1..128 characters `[A-Za-z0-9._:-]`. Reject stale or duplicate sequence updates without refreshing lease. Response `{ "ok": true, "aggregate": "working", "sessions": 1 }`.
 - Remove: `{"op":"remove","session":"<opaque-id>","seq":2}`. Remove only if sequence is newer than the last accepted update; keep a bounded short-lived tombstone so reordered older updates do not revive the removed session. Same aggregate response.
-- Status: `{"op":"status"}` returns `{ "ok":true, "aggregate":"...", "sessions":0, "device":{"connected":true,"id":"...","state":"...","rgb":[0,0,0],"last_ack_age_s":0} }`. Missing/unknown device fields are null; never fabricate a connected device. Status must not open another serial connection or override aggregate state.
-- Query: `{"op":"query"}` uses the single serial owner to send `PI1?` without refreshing the firmware heartbeat. Return the normal status shape with freshly queried device fields on success, or `{"ok":false,"error":"..."}` with a fixed error if disconnected or the bounded query deadline expires. Other local updates/status requests continue while a query waits; never return stale cached data as a successful query.
-- Shutdown: `{"op":"shutdown"}` stops only this user's bridge, sends idle if possible, closes resources and unlinks owned socket/lock metadata. No other session/process/service is touched.
+- Status: `{"op":"status"}` returns the aggregate, session count, and cached device record, for example `{"ok":true,"aggregate":"working","sessions":1,"device":{"connected":true,"id":"...","state":"working","rgb":[0,0,64],"last_ack_age_s":0}}`. Unknown device fields are null. A status request does not open a serial connection or change the light.
+- Query: `{"op":"query"}` sends `PI1?` over the bridge's existing serial connection. Success returns a fresh device acknowledgment in the status response; a disconnection or timeout returns `{"ok":false,"error":"..."}`. A query neither refreshes the firmware heartbeat nor blocks other local session updates.
+- Shutdown: `{"op":"shutdown"}` stops the bridge for the current user. It sends `idle` if possible, closes the serial connection, and cleans up its runtime files.
 
-The bridge handles one serial owner, reconnects when the Photon is plugged back in, validates hello/ACK frames, coalesces updates, and refreshes aggregate/lease expiration even when no events arrive. USB failures never block local socket replies or OMP handlers. Bound open/read/write waits and request sizes. Max256 live sessions, bounded tombstones, fixed benign error strings. Invalid clients cannot escape the current user's socket permissions. Do not unlink a live socket owned by another instance; use a lock, reject symlinked/unowned paths, and leave unrelated files alone.
+One bridge process manages the USB port. It reconnects when the Photon is plugged in, checks the firmware hello, correlates acknowledgments by sequence number, and coalesces state updates. The bridge supports up to 256 live sessions. A lock prevents two processes from binding the same runtime directory; the bridge rejects symlinks and paths owned by a different user.
 
-Bridge entry point: `.venv/bin/python host/bridge.py serve` (foreground), with optional `--state-dir PATH` for isolated tests. `host/bridge.py status` and `stop` speak the socket protocol. The OMP extension may autostart `serve` as a detached process with a minimal environment, relying on the bridge lock to prevent duplicate owners. User-facing diagnostics can select a Photon port explicitly but must still require the firmware handshake.
+Run `.venv/bin/python host/bridge.py serve` for foreground operation. Use `--state-dir PATH` for an isolated runtime directory. The OMP extension starts the bridge on demand if it cannot connect to the socket.
 
 ## OMP extension
 
-Project entry `extension/index.ts`, installed as a small user-level loader `~/.omp/agent/extensions/pi-light.ts`. Use public ExtensionAPI only; do not change managed extensions, config.yml, models, permissions or approval behavior. Top-level sessions only (`ctx.agent.kind === main`). Opaque publisher ID per root session instance; handle session switches/removal and shutdown without cross-session globals. Managed context timers provide 3-second heartbeats and safe cleanup. Local socket publication is asynchronous, bounded and failure-isolated, with per-session monotonic sequence numbers.
+The installer adds `~/.omp/agent/extensions/pi-light.ts`, a loader for [`extension/index.ts`](extension/index.ts). Only top-level sessions publish. Each has an opaque ID, an increasing sequence number, and a three-second heartbeat. Session switch or shutdown removes the old publisher.
 
-Actual hooks: agent_start/before_agent_start -> working; tool_execution_start/end for ask -> add/remove a keyed waiting reason; tool_approval_requested/resolved and plan_review_requested/resolved -> keyed waiting reasons. Do not forward event content. `agent_end.willContinue === true` is nonterminal and must not become done. Terminal agent_end (or a safely settled supported signal) can produce done/error/idle after pending waits clear; use final assistant stopReason metadata only to distinguish an unrecovered error or user abort, without inspecting text. Keep a main run with async work active until its actual terminal signal. Session shutdown/switch removes old publisher. No approval resolution APIs may be called.
+| OMP event | Effect |
+| --- | --- |
+| `before_agent_start`, `agent_start` | Set the base state to `working`. |
+| `tool_execution_start` / `tool_execution_end` for `ask` | Add or remove a pending question. |
+| `tool_approval_requested` / `tool_approval_resolved` | Add or remove a pending approval. |
+| `plan_review_requested` / `plan_review_resolved` | Add or remove a pending plan review. |
+| `agent_end` with `willContinue: true` | Keep the current base state. |
+| Terminal `agent_end` | Set `done`, `error`, or `idle` according to the final assistant stop reason. Pending requests still take precedence. |
 
-Error and complete states latch until a new run/closure; a heartbeat repeats state, never replays green transition animation. The extension's transport errors do not throw into OMP. Do not use global raw timers with unhandled callbacks; use ctx-managed timers and safe bounded callback code. Fail closed on unexpected payloads but do not alter agent execution.
+Heartbeats repeat the current state without replaying the completion flashes. The extension observes events but never resolves approvals. If the bridge is unavailable, the OMP run continues.
