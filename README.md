@@ -1,114 +1,187 @@
 # pi-light
 
-A USB desk indicator for OMP, using the RGB LED on an original Particle Photon.
+A USB desk light for [OMP](https://github.com/can1357/oh-my-pi). The built-in RGB LED on an original Particle Photon shows whether your agent is working, needs input, has finished, or hit a run error.
 
-## Current status
+![pi-light in a purple printed enclosure, with a blue indicator and USB cable](docs/images/pi-light.jpg)
 
-The host bridge and OMP integration are installed, and the original Photon is running pi-light over USB. Official Device OS2.3.1 system parts, bootloader1006 and the application were installed through Particle's supported local USB paths. Read-only device module inspection reported no validity/dependency errors. A real firmware handshake, all five state/RGB acknowledgments, actual OMP waiting/completion/error events, and board-facing webcam color stills passed.
+You need a Photon and a data-capable micro-USB cable. No extra electronics, Wi-Fi setup, or Particle cloud account is required. The host bridge sends status over USB; the enclosure is optional.
 
-Newly started default-profile OMP sessions pick up the installed loader. **Restart or explicitly reload older OMP sessions** to include them; setup does not interrupt or take over already-running sessions. macOS accessory approval was required once after firmware re-enumerated; the owner approved it, and no global security policy was changed. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for recovery and physical-test details.
+## Compatibility
+
+- **Original Particle Photon only:** Gen 2, STM32F205, platform 6. Photon 2/P2, Boron, Spark Core, and ESP32 are not compatible with this firmware.
+- The supported setup is macOS with OMP's default user profile. The installer does not configure named profiles or other agent CLIs.
+- Firmware builds use a pinned macOS x86_64 compiler. Intel Macs can run it directly; Apple Silicon needs existing x86 translation support. Setup checks the compiler but does not install Rosetta or change security settings.
 
 ## What the light means
 
-| State | Pattern |
-|---|---|
+| State | Light |
+| --- | --- |
 | Working | Slow blue breath |
-| Needs input | Amber pulse while an OMP question, tool approval, or plan review is pending |
-| Complete | Three green flashes, then steady green until new work or session closure |
-| Run error | Distinct red pulse for an unrecovered agent-run error |
+| Needs input (`waiting`) | Amber pulse during an OMP question, tool approval, or plan review |
+| Complete (`done`) | Three green flashes, then steady green |
+| Run error | Repeating red double pulse |
 | Idle | Very dim steady white |
-| Host link lost | Slow dim-white breath after 15 seconds without a valid device heartbeat |
+| Host link lost (`offline`) | Slow dim-white breath after 15 seconds without a valid device heartbeat |
 
-Across all live top-level OMP sessions, priority is **needs input, error, working, complete, idle**. A completed session does not hide another session that is still working. Root sessions include their continuing background work; subagents do not independently change the light. Ordinary failed tool calls that the agent is fixing do not mean the whole run failed. A user-aborted run becomes idle rather than green.
+Across live top-level sessions, priority is **waiting > error > working > done > idle**. A completed session cannot hide another session that is still working. Root sessions include their continuing background work; subagents do not publish independently. Completion and run errors remain until new work starts or the session closes. A user-aborted run becomes idle. A failed tool call that the agent is recovering from does not by itself mean the run failed.
 
-The board reports status only. It never answers a question, approves a tool, changes permissions, or sends a prompt. Questions asked only in free-form prose, macOS permission dialogs, terminal sudo/password prompts, and third-party applications are not guaranteed to emit the supported OMP events.
+The light never answers questions or approves tools. Free-form prose questions are not detected. macOS permission dialogs, terminal password prompts, and third-party applications do not necessarily emit OMP events. Photon boot, listening, and DFU colors are device status, not pi-light states.
 
-## Installation
+## Install
 
-From this directory, with `uv`, Bun, and Python available:
+### Prerequisites
+
+Install these before starting:
+
+- [OMP](https://github.com/can1357/oh-my-pi#install), with the public question, approval, plan-review, and terminal-run extension events used by this project. The repository does not pin an OMP version; older versions may lack these events.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) for the Python 3.11 environment below. The host dependency is pinned to `pyserial==3.5` in `requirements.txt`.
+- [Node.js](https://nodejs.org/) **22.23.4 or newer** and [Bun](https://bun.sh/docs/installation) with text-lockfile support, for firmware tooling and extension tests.
+- `git`, `curl`, `tar`, `shasum`, GNU `make`, `crc32`, and `xxd`. Apple's [Command Line Tools](https://developer.apple.com/xcode/resources/) provide the compiler and build tools; the firmware preparation script checks the required commands.
+- [Particle CLI](https://docs.particle.io/getting-started/developer-tools/cli/) for local USB flashing. It is separate from the firmware build tools. See the [firmware guide](docs/FIRMWARE.md) for installation, device selection, and upgrade precautions.
+
+Internet access is needed to download dependencies and official firmware components. Normal operation uses only local IPC and USB.
+
+### 1. Clone and build
+
+Choose a checkout path **without spaces**, as required by Particle's Device OS 2.x makefiles:
 
 ```sh
+git clone https://github.com/GitAashishG/pi-light.git
+cd pi-light
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
-.venv/bin/python scripts/install.py
+bash scripts/build-firmware.sh
 ```
 
-The guarded installer writes only:
+The build downloads pinned Device OS 2.3.1 sources, Arm GCC 9.2.1, and official Photon system modules into `firmware/.tools/`. It produces `firmware/build/pi-light.bin` and a module-validation report. It does not flash, reset, or open a device.
 
-- `~/.omp/agent/extensions/pi-light.ts`, a loader for `extension/index.ts` in this project.
-- `~/.local/bin/pi-light`, the diagnostic command.
-- A local installation receipt under `.local/`.
+### 2. Install the Photon firmware
 
-It refuses unrelated or modified installation targets and leaves existing Orca/Herdr extensions, models, approval settings, and other agent CLIs unchanged. The source must stay at this project path. Newly started default-profile OMP sessions discover the loader; existing sessions need an explicit extension reload or restart. The current controlling session is not forcibly restarted. No named profile directory was present when installed; a future named profile needs its own approved loader rather than an assumed shared configuration.
+Follow [Build and flash the Photon](docs/FIRMWARE.md) before continuing. The application requires system part 2 version **2302 or newer** and a compatible system/bootloader set; the official 2.3.1 system pair requires bootloader **1003 or newer**. Flashing only the application onto an old Photon is not enough.
 
-The first indicator event starts the private bridge automatically. It is not a login service and has no network listener. Session heartbeats refresh every three seconds; crashed publishers expire after twelve seconds. If the bridge itself crashes or loses USB, the firmware's independent fifteen-second watchdog changes to offline rather than keeping a stale success light.
+Use the guide's explicit device selection. Do not select another serial board or use raw bootloader DFU writes.
 
-## Diagnostics
+### 3. Install the host integration
+
+From the checkout:
+
+```sh
+.venv/bin/python scripts/install.py
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The `export` applies to this terminal only; no shell startup file is edited. You can instead run `~/.local/bin/pi-light` wherever this guide says `pi-light`.
+
+The installer creates an OMP loader at `~/.omp/agent/extensions/pi-light.ts` and the command at `~/.local/bin/pi-light`. Both point into this checkout, so keep the checkout and `.venv` in place. It refuses to overwrite unrelated or modified installation targets and leaves other integrations and approval settings alone.
+
+Connect the flashed Photon and start a new default-profile OMP session. Its first indicator event starts the bridge automatically; allow a few seconds for the initial heartbeat. **Restart or explicitly reload existing sessions** to load the extension. The bridge is a detached process, not a login service.
 
 ```sh
 pi-light status
 pi-light query
+```
+
+`status` returns the aggregate session state and cached device health. `query` requests a fresh device acknowledgment and fails if the device is unavailable; it does not refresh the firmware watchdog. Check `device.connected` as well as `aggregate`: a working host session does not prove the Photon is connected.
+
+## Everyday use
+
+Leave the Photon plugged in while using OMP. Session heartbeats run every three seconds, and a crashed publisher's lease expires after twelve seconds. The bridge reconnects after USB is unplugged and restored. If the bridge stops sending valid heartbeats, a powered Photon changes to offline after fifteen seconds rather than displaying stale success.
+
+To run the bridge yourself, without opening OMP:
+
+```sh
+pi-light serve
+```
+
+This stays in the foreground. Use a second terminal for diagnostics and notifications. Only one bridge can own the runtime directory and USB connection.
+
+### Manual light test
+
+With a bridge running, send a short-lived notification:
+
+```sh
+session="desk-test:$(uuidgen)"
+pi-light notify waiting --session "$session" --seq 1
+pi-light query
+sleep 3
+pi-light remove --session "$session" --seq 2
+```
+
+The three-second pause gives you time to see the amber pulse. Each update leases the state for twelve seconds unless refreshed. Use a new session ID for each test, or keep increasing `--seq` for an existing ID; duplicate or older sequence numbers are rejected. The test participates in normal session priority and does not override higher-priority publishers. Other accepted states are `working`, `done`, `error`, and `idle`.
+
+### Brightness and stopping
+
+Brightness is a bridge startup setting, not a live command. The default is 48; the range is 0–128, with 0 turning off all patterns, including offline.
+
+First close all OMP sessions using the extension and stop any other publishers. Even an idle open session sends heartbeats and can restart a stopped bridge. Then run:
+
+```sh
 pi-light stop
+sleep 4
+pi-light serve --brightness 24
 ```
 
-`status` is a cached host/device health read. `query` obtains a fresh device acknowledgment without renewing the firmware heartbeat and fails honestly if the device is unavailable. `stop` stops only this user's bridge; a live OMP session can start it again on a later heartbeat.
+The pause lets the old serial owner shut down. Wait for `serve` to stay running before reopening OMP, and leave that terminal open; Ctrl-C stops it. The next automatic start uses the default brightness again. If `serve` reports `already-running`, another bridge won ownership, so its settings still apply. `pi-light stop` stops only this user's bridge, not OMP or its sessions.
 
-For a brief manual test, use an ordinary expiring session lease, then remove it:
+## Hardware and enclosure
+
+The Photon uses its onboard RGB LED and gets power and data from USB. There is no wiring step or external LED strip.
+
+![Original Photon seated in the open purple tray, showing board placement and the USB cable opening](docs/images/assembly.jpg)
+
+The interior photo shows board orientation and cable clearance. **Unplug USB before fitting or removing the board.** Keep pins clear of the case floor and avoid side loads on the USB socket.
+
+The pictured enclosure is optional. The [enclosure guidance](docs/ENCLOSURE.md) covers diffuser material, board clearance, cable strain relief, and recovery-button access. Check the fit of your board, header pins, cable, and lid before using a case; the pictured prototype does not establish fit for every printer or Photon variant. Keep SETUP and RESET accessible through a removable lid or service openings.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `pi-light: command not found` | Use `~/.local/bin/pi-light`, or add `~/.local/bin` to this terminal's `PATH` as above. |
+| `bridge-unavailable` | Diagnostics do not autostart the bridge. Start a newly loaded OMP session or run `pi-light serve` in another terminal. Check that the checkout and `.venv` still exist. |
+| Device disconnected, `device-unavailable`, or `device-timeout` | Use a data cable, close serial monitors, and check that the board runs pi-light rather than listening/DFU mode. Automatic discovery requires exactly one original-Photon USB serial candidate. Reconnect after flashing and handle any macOS accessory approval yourself. |
+| `already-running` when changing brightness | Close publishers before `stop`; otherwise their next heartbeat can autostart the default bridge. |
+| Light does not match this session | Check `status` for other live publishers. Waiting and error take precedence over working; completed sessions stay green until new work or closure. Reload older OMP sessions if events are missing. |
+| `stale-sequence` | Use a fresh opaque session ID or a sequence number newer than all updates and removals for that ID. |
+| `unsafe-state-path` | Inspect ownership, permissions, and symlinks under `~/.local/state/pi-light`. Do not delete a live socket or loosen permissions to bypass the check. |
+| Photon shows safe-mode or boot colors | Check the system/bootloader dependencies in the [firmware guide](docs/FIRMWARE.md). These are not agent states. |
+
+For serial diagnosis, set `PHOTON_PORT` to the exact path reported for your Photon, then use `pi-light serve --port "$PHOTON_PORT"`. This still requires the pi-light handshake. Do not guess a port or point it at unrelated hardware.
+
+## Local API and privacy
+
+The bridge listens on a private Unix socket at `~/.local/state/pi-light/bridge.sock`, not TCP. The directory is mode 0700 and the socket is 0600. The extension sends an opaque session ID, state, and sequence number; the Photon receives only aggregate state, sequence, and brightness. This project does not send prompts, code, paths, credentials, or tool arguments to the board or log those payloads. Device status includes the Photon ID, so redact diagnostic output before sharing it.
+
+See [PROTOCOL.md](PROTOCOL.md) for the bounded JSONL and USB interfaces. Other clients can publish through these interfaces, but the installer supplies no non-OMP hooks.
+
+## Uninstall
+
+Close OMP sessions using the extension first so they cannot restart the bridge. From the checkout:
 
 ```sh
-pi-light notify waiting --session desk-test --seq 1
-pi-light remove --session desk-test --seq 2
+~/.local/bin/pi-light stop
+.venv/bin/python scripts/install.py --uninstall
 ```
 
-Manual tests do not override the priority of real sessions and expire after twelve seconds if not refreshed. `serve --brightness 24` can run a foreground bridge at lower brightness after stopping the existing owner. The default is 48, maximum 128. No external LED strip or additional sensor is required.
+If the bridge is already stopped, the first command may report `bridge-unavailable`; proceed with uninstall. The installer removes only its managed loader, command, and receipt, and preserves modified targets. Firmware, source, dependencies, and unrelated integrations remain. The Photon stays flashed; unplug it if you no longer want the indicator powered.
 
-The private runtime directory is `~/.local/state/pi-light` (0700), with `bridge.sock` (0600). A directory lock prevents duplicate serial owners. Local clients use a strict bounded schema, sequence numbers and monotonic leases. Only opaque session identity, state and timing reach the bridge; only aggregate state, sequence and brightness reach the Photon. Prompts, code, paths, credentials and tool arguments are neither sent to the board nor logged by this project. The USB interface has no Wi-Fi or Particle cloud dependency.
+## Contributing
 
-## Build and tests
+From the checkout with the dependencies installed:
 
 ```sh
-bash scripts/build-firmware.sh
 .venv/bin/python -m unittest discover -s tests/host -p 'test_*.py' -v
 bun test tests/extension.test.ts
 make -C tests/firmware test
+```
+
+The native firmware tests need a C++14 compiler with AddressSanitizer and UndefinedBehaviorSanitizer, plus `python3` on `PATH`. They do not need the Particle SDK or a board.
+
+The OMP integration fixtures use a deterministic local provider rather than a paid model. **Unplug the Photon before running these isolated-runtime tests:** their test bridges can still discover a connected board. After installing the loader, run:
+
+```sh
 .venv/bin/python tests/runtime-smoke.py --installed
 .venv/bin/python tests/async-runtime.py
 ```
 
-The first build prepares project-local pinned Device OS 2.3.1 source, Arm GCC 9.2.1, and Particle's module parser. It runs recursive library dependencies before linking to avoid the SDK's clean parallel-build race. Output is `firmware/build/pi-light.bin`; the build never flashes. See [firmware/BUILD.md](firmware/BUILD.md) for hashes, platform/address validation and safe programming constraints.
-
-`runtime-smoke.py` launches real OMP RPC processes and the actual extension with a deterministic local provider. Its question and intentional failure are test fixtures, not a paid model or a fabricated production status. It verifies waiting, two-session precedence, completion, run error and cleanup. Tool-approval scenarios only refuse their harmless test read; they never accept a safety approval. `--live-bridge` instead uses the normal private bridge and will briefly change the physical light after hardware setup is complete.
-
-`async-runtime.py` exercises a real native background bash process through the actual installed loader. It observes the RPC nonterminal end, records the extension-converted event, holds the worker through a managed heartbeat interval, and requires working state until the worker is explicitly released and the session settles. Add `--live-bridge` to require matching physical Photon states; run that mode without other publishers so another session cannot mask an early-completion bug. The worker has a finite deadline, and cleanup releases only that owned fixture.
-
-For the exclusive physical watchdog test, first stop the bridge, identify your own Photon locally, then run `.venv/bin/python tests/hardware-watchdog.py --device-id "$PHOTON_DEVICE_ID"`. The ID is required and must be 24 hexadecimal characters; there is no machine-specific default. This briefly controls the LED and exercises the real timeout. Restart the bridge afterward.
-
-## Observed verification
-
-- 39 Python bridge tests passed, including leases, ordering, precedence, socket ownership, malformed requests, USB handshake/ACK correlation, reconnect, query deadlines and cleanup. USB tests used an isolated fake peer, not the physical board.
-- Six Bun state/publisher tests passed. Native firmware parser, watchdog, brightness, wrap and animation checks passed with address/undefined-behavior sanitizers; four module-header tests passed.
-- Real OMP runtime tests passed through the actual installed loader and physical Photon: structured-question waiting, an explicitly denied test approval, two-session priority, terminal completion, unrecovered local-provider error and session-shutdown cleanup. The local provider emitted deterministic responses; no paid/external model was called. Each live aggregate assertion required a matching physical device acknowledgment.
-- The modular application built as 5,580 bytes of text, 128 bytes of data and 1,896 bytes of BSS; the emitted binary passed Particle's platform-6, dependency, address-span and CRC checks. The two official system modules and application were flashed successfully using the supported CLI.
-- The connected board initially had bootloader module2 and a monolithic layout. The separately approved official bootloader2.3.1 was installed through normal-mode Device OS, never a raw DFU bootloader write. Read-only hardware module inspection reported bootloader1006, both system parts2302, user module6, empty validity-error lists, and compatible dependencies.
-- The board-facing webcam captured stills with no audio. An authorized temporary room-lighting check restored the light's original state. Household device names, entity IDs and credentials are not part of this source; room lighting is not part of the production agent indicator.
-
-The real Photon reported working blue[0,0,5], waiting amber[8,2,0], done green[0,47,0], error red[47,0,0], and idle white[2,2,2] at sampled animation phases. Webcam stills independently showed the corresponding blue, orange/amber, green and red light; dark-room highlights bloom, so these are visual checks rather than calibrated color measurements. Evidence and isolated fixture logs are under ignored `.local/`. Native tests and bounded hardware checks are not an overnight soak.
-
-The physical watchdog acceptance passed: after state heartbeats stopped, query/HELLO/invalid frames did not renew the timer and the board entered offline after15.366seconds. A repeated done heartbeat preserved the latched green output; the test ended in idle. The normal detached bridge was then restored through the same auto-start path used by the extension, and a fresh query reported the real connected Photon in idle with RGB[2,2,2] and zero test publishers. Detailed receipt: `.local/hardware-watchdog.json`.
-
-The async-job yield regression also passed on the actual Photon. RPC emitted `isTerminal:false` with `awaitingAsyncWork:true`; the corresponding extension event carried `willContinue:true`. The installed production handler therefore kept working/blue across 57 status observations while the real worker remained pending, then reported done/green only after actual worker completion and `session_settled`. No production handler change was needed. Evidence: `.local/async-runtime/result.json`; reproduce with `.venv/bin/python tests/async-runtime.py --live-bridge`.
-
-## Recovery and enclosure
-
-Use the Photon’s RESET/SETUP buttons to enter DFU for recovery. Never select the unrelated ESP32 serial port, mass erase, overwrite DCT/key regions, or bypass a macOS permission prompt. The project does not claim or log in to a Particle account. A hardware bootloader upgrade was separately approved, with power-loss recovery risk disclosed.
-
-The owner is printing the enclosure; see [docs/ENCLOSURE.md](docs/ENCLOSURE.md) for diffuser, USB strain relief, clearances and recovery-button access. The ESP32 thermometer logger remains a separate, untouched project.
-
-To remove only this project's installed hooks/command:
-
-```sh
-pi-light stop
-.venv/bin/python scripts/install.py --uninstall
-```
-
-The installer preserves modified files instead of deleting them. Firmware, project source and unrelated integrations remain in place.
+To test deliberately against the normal bridge and real light, use `--live-bridge` instead, with no other publishers active. Those runs briefly control the light and require a working Photon connection. See [firmware/BUILD.md](firmware/BUILD.md) for low-level build pins, module layout, and firmware internals.
