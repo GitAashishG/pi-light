@@ -2,7 +2,9 @@
 
 pi-light shows when your [OMP](https://github.com/can1357/oh-my-pi) coding agent needs you, without switching back to the terminal. An original Particle Photon plugs into your Mac over USB and displays the session state on its built-in RGB LED.
 
-![Blue working light shining through the round window in the purple Photon enclosure](docs/images/pi-light.jpg)
+[![A green pi-light mounted beneath the monitor, connected by USB. Watch the demo on YouTube.](docs/images/pi-light.jpg)](https://youtu.be/SE3suwZFlJ4)
+
+[Watch the 1-minute demo on YouTube](https://youtu.be/SE3suwZFlJ4)
 
 ## What the light means
 
